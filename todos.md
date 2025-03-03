@@ -1,0 +1,9 @@
+- GitHub
+  - New PR changing CI or package.json or lockfiles
+- DNS
+  - Zone change
+  - Dangling pointer
+- NPM/PyPi
+  - Release triggered outside of CI/CD
+- Release
+  - Malicious code in diffs
