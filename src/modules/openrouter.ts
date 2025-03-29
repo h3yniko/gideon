@@ -2,7 +2,7 @@ import axios from "axios";
 import { Env } from './env'
 import { z } from "zod";
 
-const responseSchema = z.object({
+let responseSchema = z.object({
   model: z.string(),
   provider: z.string(),
   usage: z.object({
@@ -18,14 +18,14 @@ const responseSchema = z.object({
   })),
 });
 
-export namespace OpenRouter {
+export namespace open_router {
   export type Message = {
     role: 'system' | 'user' | 'assistant';
     content: string;
   }
 
   export async function complete(messages: Message[], options?: { model?: string }) {
-    const response = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
+    let response = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
       model: options?.model ?? 'openai/gpt-4o',
       messages,
     }, {
