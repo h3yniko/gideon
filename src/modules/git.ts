@@ -3,7 +3,7 @@ import { Struct } from "../lib/struct";
 import { fs } from "zx";
 import { join } from "path";
 
-export namespace git {
+export namespace Git {
   export class RepoToClone extends Struct {
     declare owner: string;
     declare name: string;
@@ -42,8 +42,8 @@ export namespace git {
     ]}`;
 
     if (repo.git_ref) {
-      await $`git -C ${path} fetch origin ${repo.git_ref}`;
-      await $`git -C ${path} checkout ${repo.git_ref}`;
+      await $`git -C ${path} fetch --depth=1 origin ${repo.git_ref}`;
+      await $`git -C ${path} checkout FETCH_HEAD`;
     }
 
     return {

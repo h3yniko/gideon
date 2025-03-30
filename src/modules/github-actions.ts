@@ -1,39 +1,44 @@
 import { fs, globby, YAML } from "zx";
-import { git } from "./git";
+import { Git } from "./git";
 import { Struct } from "../lib/struct";
 import path from "path";
-import { open_router } from "./openrouter";
+import { OpenRouter } from "./openrouter";
 
-const prompt = `You are an expert security analyst specializing in GitHub Actions. Your task is to meticulously examine provided GitHub Action workflow code and identify **only direct and exploitable vulnerabilities** that could lead to unauthorized code execution, secret exfiltration, or data manipulation by an external, untrusted user (e.g., via issue creation, pull requests, or other event triggers).
+// if injection happens in dependency, inlcude dependency name in the output
+// should ONLY review exploitable vulnerabilities in main action
+const prompt = `
+You are an expert security analyst specializing in GitHub Actions workflows. Your task is to meticulously analyze the provided workflow code and identify any direct and exploitable vulnerabilities. Focus exclusively on scenarios where an attacker can exploit the workflow to achieve unauthorized actions, such as:
 
-**Focus exclusively on scenarios where an attacker can directly control inputs that result in:**
+1. **Arbitrary Code Execution:**
+   - Identify cases where untrusted user inputs are executed as code (e.g., shell injection, command injection).
+   - Provide detailed reproduction steps, including:
+     - Specific GitHub event or payload required.
+     - How the malicious input is processed in the workflow.
+     - The expected outcome of the attack.
 
-1.  **Arbitrary Code Execution:**
-    * Identify instances where user-supplied input is directly or indirectly executed as code (e.g., shell injection, command injection, script execution).
-    * Provide precise steps to reproduce the attack, including the specific GitHub event, payload, and expected outcome.
-    * Example: "Shell injection via \`echo "Title: \${{ github.event.issue.title }}" >> prompt.txt; bash prompt.txt\`. Attack steps: 1. Create a new issue. 2. Set the issue title to \`test"; malicious_command; #\`. 3. The action executes \`malicious_command\`."
+2. **Secret Exfiltration:**
+   - Pinpoint vulnerabilities that allow attackers to access sensitive secrets (e.g., \`GITHUB_TOKEN\`, API keys).
+   - Include clear steps demonstrating how secrets can be exfiltrated (e.g., via network requests or logs).
 
-2.  **Secret Exfiltration:**
-    * Pinpoint vulnerabilities that allow an attacker to retrieve sensitive information (e.g., GitHub secrets, environment variables).
-    * Provide detailed reproduction steps, including payload and expected exfiltration method (e.g., network request, logging).
-    * Example: "Secret exfiltration via malicious git clone and run. Attack steps: 1. create a pull request with changed code that will clone a repository with malicious code, and run that code. 2. The malicious code will read the GITHUB_TOKEN and send it to an external server. 3. The token is exfiltrated."
+3. **Data Manipulation:**
+   - Highlight scenarios where attackers can modify repository data or workflow configurations.
+   - Provide concrete examples of how this manipulation could compromise repository integrity or security.
 
-3.  **Data Manipulation:**
-    * Identify cases where an attacker can modify data or configurations in a way that compromises the integrity or security of the workflow or repository.
-    * Provide concrete steps to reproduce the attack, including payload and expected outcome.
+---
 
-**Exclude the following from your analysis:**
+### Constraints:
+- Focus only on **directly exploitable vulnerabilities** triggered by untrusted inputs (e.g., issue titles, pull request content).
+- Exclude attacks requiring write access to the repository or manual maintainer errors.
+- Avoid theoretical attacks that are not easily reproducible.
 
-* Denial-of-service or resource exhaustion attacks that do not involve direct code execution or secret exfiltration.
-* "Griefing" attacks that primarily pollute output or trigger false positives (e.g., injecting data into TruffleHog scans).
-* Any theoretical attacks that are not easily reproducible.
-* Any attacks that require maintainer error, such as a maintainer manually running malicious code.
-* Any attacks that are not directly triggered by the github actions.
-* Any attacks that require a malicious actor to have write access to the repository.
+---
 
-**Your output should be a concise list of confirmed, reproducible vulnerabilities with detailed reproduction steps for each.** If no such vulnerabilities are found, state "No exploitable vulnerabilities found."`;
+### Output Requirements:
+- Provide a concise list of confirmed vulnerabilities with detailed reproduction steps for each.
+- If no vulnerabilities are found, explicitly state: **"No exploitable vulnerabilities found."**
+`;
 
-export namespace github_actions {
+export namespace GithubActions {
   export interface GithubActionInput {
     description?: string;
     default?: boolean | string | number | string[];
@@ -104,70 +109,24 @@ export namespace github_actions {
     };
   }
 
-  export async function scanAction(actionName: string) {
-    let actions = new Map<string, GithubAction>();
-    let queue = [actionName];
-    while (queue.length > 0) {
-      let currentActionName = queue.pop()!;
-      let action = await getAction(currentActionName);
-      actions.set(currentActionName, action);
-      let dependencies = await listDependencies(action);
-      for (let dep of dependencies) {
-        if (!actions.has(dep)) {
-          queue.push(dep);
-        }
-      }
-    }
-
-    const messages: open_router.Message[] = [
-      {
-        role: 'system',
-        content: prompt,
-      },
-      {
-        role: 'user',
-        content: `mainAction: ${JSON.stringify(actions.get(actionName))}`,
-      },
-      {
-        role: 'user',
-        content: `dependencies: ${JSON.stringify(actions.values().toArray())}`,
-      },
-    ];
-    console.log(messages)
-    const reponse = await open_router.complete(messages);
-
-    console.log(`Response: ${JSON.stringify(reponse.choices[0].message.content)}`);
-  }
-
-  async function getAction(actionName: string) {
-    let match = actionName.match(/^(?<owner>[^/]+)\/(?<repoName>[^/@]+)(?<actionPath>\/[^@]+)?(?:@(?<gitRef>.+))?$/);
-    if (!match) {
-      throw new Error('Invalid repository name. Please use the format "owner/repo[/action_path][@ref]"');
-    }
-
-    const owner = match.groups?.owner!;
-    const repoName = match.groups?.repoName!;
-    const gitRef = match.groups?.gitRef;
-
-    let repo = await git.clone({
-      owner: owner,
-      name: repoName,
-      git_ref: gitRef
-    });
-
-    let actionFolder = match.groups?.actionPath ?
-      path.join(repo.path, match.groups.actionPath.replace(/^\//, ""))
-      : repo.path;
-
-    let matches = await globby(`${actionFolder}/**/{action.yaml,action.yml}`);
-    let actionPath = matches[0];
-
-    if (!actionPath) {
-      console.error(`Action file not found at ${actionPath}`);
-      process.exit(1);
-    }
-
-    return parseActionFile(actionPath);
+  class GithubWorkflow extends Struct {
+    declare name: string;
+    declare on: Record<string, any>; // Triggers (e.g., push, pull_request)
+    declare jobs: Record<string, {
+      name?: string;
+      runsOn?: string | string[];
+      steps?: Array<{
+        name?: string;
+        id?: string;
+        uses?: string;
+        run?: string;
+        shell?: string;
+        env?: Record<string, string>;
+        "working-directory"?: string;
+      }>;
+      uses?: string;  // For reusable workflows
+      with?: Record<string, any>;  // Inputs for reusable workflows
+    }>;
   }
 
   async function parseActionFile(
@@ -194,6 +153,258 @@ export namespace github_actions {
       default:
         throw new Error(`Unknown action type: ${baseAction.runs.using}`);
     }
+  }
+
+  async function getWorkflow(workflowPath: string): Promise<GithubWorkflow> {
+    let match = workflowPath.match(/^(?<owner>[^/]+)\/(?<repoName>[^/]+)(?<workflowPath>\/.+)$/);
+    if (!match) {
+      throw new Error('Invalid repository name. Please use the format "owner/repo[/workflow_path]"');
+    }
+
+    const owner = match.groups?.owner!;
+    const repoName = match.groups?.repoName!;
+
+    let repo = await Git.clone({
+      owner: owner,
+      name: repoName
+    });
+
+    let workflowAbsolutePath = path.join(repo.path, match.groups?.workflowPath.replace(/^\//, "")!)
+
+    let content = await fs.readFile(workflowAbsolutePath, 'utf8');
+    let rawData = YAML.parse(content);
+
+    if (!rawData || typeof rawData !== 'object') {
+      throw new Error('Invalid YAML structure');
+    }
+
+    return GithubWorkflow.create(rawData);
+  }
+
+  async function getReusableWorkflow(workflowRef: string): Promise<GithubWorkflow> {
+    // Parse the workflow reference which should be in format "owner/repo/.github/workflows/file.yml@ref"
+    const match = workflowRef.match(/^(?<owner>[^/]+)\/(?<repoName>[^/]+)\/(?<workflowPath>.+?)(?:@(?<gitRef>.+))?$/);
+    if (!match) {
+      throw new Error('Invalid reusable workflow reference. Expected format: "owner/repo/path/to/workflow.yml[@ref]"');
+    }
+
+    const owner = match.groups?.owner!;
+    const repoName = match.groups?.repoName!;
+    const workflowPath = match.groups?.workflowPath!;
+    const gitRef = match.groups?.gitRef;
+
+    let repo = await Git.clone({
+      owner: owner,
+      name: repoName,
+      git_ref: gitRef
+    });
+
+    const fullWorkflowPath = path.join(repo.path, workflowPath);
+    
+    let content = await fs.readFile(fullWorkflowPath, 'utf8');
+    let rawData = YAML.parse(content);
+
+    if (!rawData || typeof rawData !== 'object') {
+      throw new Error('Invalid YAML structure in reusable workflow');
+    }
+
+    return GithubWorkflow.create(rawData);
+  }
+
+  export async function scanAction(actionName: string) {
+    let actions = new Map<string, GithubAction>();
+    let queue = [actionName];
+    while (queue.length > 0) {
+      let currentActionName = queue.pop()!;
+      let action = await getAction(currentActionName);
+      actions.set(currentActionName, action);
+      let dependencies = await listDependencies(action);
+      for (let dep of dependencies) {
+        if (!actions.has(dep)) {
+          queue.push(dep);
+        }
+      }
+    }
+
+    const messages: OpenRouter.Message[] = [
+      {
+        role: 'system',
+        content: prompt,
+      },
+      {
+        role: 'user',
+        content: `mainAction: ${JSON.stringify(actions.get(actionName))}`,
+      },
+      {
+        role: 'user',
+        content: `dependencies: ${JSON.stringify(actions.values().toArray())}`,
+      },
+    ];
+    console.log(messages)
+    const reponse = await OpenRouter.complete(messages);
+
+    console.log(`Response: ${JSON.stringify(reponse.choices[0].message.content)}`);
+  }
+
+  export async function scanWorkflow(workflowPath: string) {
+    const workflow = await getWorkflow(workflowPath);
+    const dependencies = new Map<string, GithubAction>();
+    const reusableWorkflows = new Map<string, GithubWorkflow>();
+    
+    // Process all jobs in the workflow
+    for (const jobKey of Object.keys(workflow.jobs)) {
+      const job = workflow.jobs[jobKey];
+      
+      // Handle jobs that use reusable workflows
+      if (job.uses) {
+        try {
+          console.log(`Job '${jobKey}' uses reusable workflow: ${job.uses}`);
+          
+          // Fetch and analyze the reusable workflow
+          const reusableWorkflow = await getReusableWorkflow(job.uses);
+          reusableWorkflows.set(job.uses, reusableWorkflow);
+          
+          // Recursively process actions used in the reusable workflow
+          for (const reusableJobKey of Object.keys(reusableWorkflow.jobs)) {
+            const reusableJob = reusableWorkflow.jobs[reusableJobKey];
+            
+            // Handle nested reusable workflows (if any)
+            if (reusableJob.uses) {
+              console.log(`Reusable workflow contains another reusable workflow: ${reusableJob.uses}`);
+              // Could further extend this to handle deeply nested reusable workflows if needed
+            }
+            
+            // Process steps in the reusable workflow job
+            if (reusableJob.steps) {
+              for (const step of reusableJob.steps) {
+                if (step.uses) {
+                  const actionName = step.uses;
+                  if (!dependencies.has(actionName)) {
+                    try {
+                      const action = await getAction(actionName);
+                      dependencies.set(actionName, action);
+                    } catch (error) {
+                      console.error(`Error fetching action ${actionName} from reusable workflow:`, error);
+                    }
+                  }
+                }
+              }
+            }
+          }
+        } catch (error) {
+          console.error(`Error processing reusable workflow ${job.uses}:`, error);
+        }
+      }
+      
+      // Handle regular jobs with steps
+      if (job.steps) {
+        for (const step of job.steps) {
+          if (step.uses) {
+            const actionName = step.uses;
+            if (!dependencies.has(actionName)) {
+              try {
+                const action = await getAction(actionName);
+                dependencies.set(actionName, action);
+              } catch (error) {
+                console.error(`Error fetching action ${actionName}:`, error);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    const messages: OpenRouter.Message[] = [
+      {
+        role: 'system',
+        content: prompt,
+      },
+      {
+        role: 'user',
+        content: `workflow: ${JSON.stringify(workflow)}`,
+      },
+      {
+        role: 'user',
+        content: `reusableWorkflows: ${JSON.stringify(Array.from(reusableWorkflows.values()))}`,
+      },
+      {
+        role: 'user',
+        content: `dependencies: ${JSON.stringify(Array.from(dependencies.values()))}`,
+      },
+    ];
+
+    console.log(messages);
+    const response = await OpenRouter.complete(messages);
+
+    console.log(`Response: ${JSON.stringify(response.choices[0].message.content)}`);
+  }
+
+  export async function scanRepo(repoPath: string) {
+    let match = repoPath.match(/^(?<owner>[^/]+)\/(?<repoName>[^@]+)$/);
+    if (!match) {
+      throw new Error('Invalid repository name. Please use the format "owner/repo[@ref]"');
+    }
+
+    const owner = match.groups?.owner!;
+    const repoName = match.groups?.repoName!;
+
+    let repo = await Git.clone({
+      owner: owner,
+      name: repoName,
+    });
+
+    const workflowFiles = await globby(`${repo.path}/.github/workflows/**/*.{yml,yaml}`);
+    
+    if (workflowFiles.length === 0) {
+      console.log(`No workflow files found in ${owner}/${repoName}`);
+      return;
+    }
+    
+    console.log(`Found ${workflowFiles.length} workflow files in ${owner}/${repoName}`);
+    
+    // Scan each workflow file
+    for (const workflowFile of workflowFiles) {
+      const relativePath = path.relative(repo.path, workflowFile);
+      const workflowPath = `${owner}/${repoName}/${relativePath}`;
+      
+      console.log(`Scanning workflow: ${workflowPath}`);
+      try {
+        await scanWorkflow(workflowPath);
+      } catch (error) {
+        console.error(`Error scanning workflow ${workflowPath}:`, error);
+      }
+    }
+  }
+
+  async function getAction(actionName: string) {
+    let match = actionName.match(/^(?<owner>[^/]+)\/(?<repoName>[^@]+)(?<actionPath>\/.+)?(?:@(?<gitRef>.+))?$/);
+    if (!match) {
+      throw new Error('Invalid repository name. Please use the format "owner/repo[/action_path][@ref]"');
+    }
+
+    const owner = match.groups?.owner!;
+    const repoName = match.groups?.repoName!;
+    const gitRef = match.groups?.gitRef;
+
+    let repo = await Git.clone({
+      owner: owner,
+      name: repoName,
+      git_ref: gitRef
+    });
+
+    let actionFolder = match.groups?.actionPath
+      ? path.join(repo.path, match.groups.actionPath.replace(/^\//, ""))
+      : repo.path;
+
+    let matches = await globby(`${actionFolder}/**/{action.yaml,action.yml}`);
+    let actionPath = matches[0];
+
+    if (!actionPath) {
+      console.error(`Action file not found at ${actionPath}`);
+      process.exit(1);
+    }
+
+    return parseActionFile(actionPath);
   }
 
   async function listDependencies(action: GithubAction): Promise<string[]> {

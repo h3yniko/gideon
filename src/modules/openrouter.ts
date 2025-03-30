@@ -18,7 +18,7 @@ let responseSchema = z.object({
   })),
 });
 
-export namespace open_router {
+export namespace OpenRouter {
   export type Message = {
     role: 'system' | 'user' | 'assistant';
     content: string;
@@ -26,7 +26,7 @@ export namespace open_router {
 
   export async function complete(messages: Message[], options?: { model?: string }) {
     let response = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
-      model: options?.model ?? 'openai/gpt-4o',
+      model: options?.model ?? 'deepseek/deepseek-chat-v3-0324:free',
       messages,
     }, {
       headers: {

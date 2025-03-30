@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { github_actions } from './modules/github-actions';
+import { GithubActions } from './modules/github-actions';
 
 let program = new Command();
 
@@ -15,8 +15,27 @@ git.command('scan-action')
       console.error('Please provide a name for the action.');
       process.exit(1);
     }
-    github_actions.scanAction(name)
+    GithubActions.scanAction(name)
   })
 
+git.command('scan-workflow')
+  .option('-n, --name <repo>', 'Workflow name to scan')
+  .action(async ({ name }) => {
+    if (!name) {
+      console.error('Please provide a name for the workflow.');
+      process.exit(1);
+    }
+    GithubActions.scanWorkflow(name)
+  })
+
+git.command('scan-repo')
+  .option('-n, --name <repo>', 'Repository name')
+  .action(async ({ name }) => {
+    if (!name) {
+      console.error('Please provide an owner and a name for the repository.');
+      process.exit(1);
+    }
+    GithubActions.scanRepo(name)
+  })
 
 program.parse();
