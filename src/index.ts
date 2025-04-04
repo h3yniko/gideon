@@ -1,41 +1,55 @@
 import { Command } from 'commander';
-import { GithubActions } from './modules/github-actions';
+import { GitHub } from './modules/github';
 
 let program = new Command();
 
 program
   .name('gideon')
 
-let git = program.command('git')
+let git = program.command('github')
 
-git.command('scan-action')
+git.command('action')
+  .command('scan')
   .option('-n, --name <repo>', 'Action name to scan')
   .action(async ({ name }) => {
     if (!name) {
       console.error('Please provide a name for the action.');
       process.exit(1);
     }
-    GithubActions.scanAction(name)
+    const action = await GitHub.Actions.get(name)
+    console.log(JSON.stringify(action, null, 2));
+    const report = await GitHub.Actions.scan(action)
+    console.log(report.reference)
+    console.log(report.vulnerability)
   })
 
-git.command('scan-workflow')
+git.command('workflow')
+  .command('scan')
   .option('-n, --name <repo>', 'Workflow name to scan')
-  .action(async ({ name }) => {
+  .action(async ({ name }: { name: string}) => {
     if (!name) {
       console.error('Please provide a name for the workflow.');
       process.exit(1);
     }
-    GithubActions.scanWorkflow(name)
+    const workflow = await GitHub.Workflows.get(name)
+    const result = await GitHub.Workflows.scan(workflow)
+    console.log(result.reference)
+    console.log(result.vulnerability)
   })
 
-git.command('scan-repo')
+git.command('repo')
+  .command('scan')
   .option('-n, --name <repo>', 'Repository name')
   .action(async ({ name }) => {
     if (!name) {
       console.error('Please provide an owner and a name for the repository.');
       process.exit(1);
     }
-    GithubActions.scanRepo(name)
+    const results = await GitHub.Repos.scan(name)
+    for (let result of results) {
+      console.log(result.reference)
+      console.log(result.vulnerability)
+    }
   })
 
 program.parse();
