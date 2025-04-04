@@ -1,4 +1,4 @@
-import { Struct } from "../../lib/struct";
+import { Struct } from "../../lib/struct.js";
 
 export namespace Types {
   export class Repo extends Struct {

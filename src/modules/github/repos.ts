@@ -1,38 +1,48 @@
 import { globby, path } from "zx";
-import { Workflows } from "./workflows";
-import { Git } from "../git";
-import { Types } from "./types";
+import { Workflows } from "./workflows.js";
+import { Git } from "../git/index.js";
+import { Types } from "./types.js";
 
 export namespace Repos {
-  export async function scan(repoPath: string): Promise<Types.ScanResponse[]> {
-    let match = repoPath.match(/^(?<owner>[^/]+)\/(?<repoName>[^@]+)$/);
+  export async function* scan(
+    repoPath: string,
+  ): AsyncGenerator<Types.ScanResponse> {
+    let match = repoPath.match(
+      /^(?<repoOwner>[^/]+)\/(?<repoName>[^@]+)(@(?<gitRef>.+))?$/,
+    );
     if (!match) {
-      throw new Error('Invalid repository name. Please use the format "owner/repo[@ref]"');
+      throw new Error(
+        'Invalid repository name. Please use the format "owner/repo[@ref]"',
+      );
     }
 
-    const owner = match.groups?.owner!;
+    const repoOwner = match.groups?.repoOwner!;
     const repoName = match.groups?.repoName!;
+    const gitRef = match.groups?.gitRef;
 
     let repo = await Git.clone({
-      owner: owner,
-      name: repoName,
+      source: `https://github.com/${repoOwner}/${repoName}.git`,
+      folder: gitRef
+        ? `${repoOwner}/${repoName}@${gitRef}`
+        : `${repoOwner}/${repoName}`,
+      gitRef,
     });
 
-    const workflowFiles = await globby(`${repo.path}/.github/workflows/*.{yml,yaml}`);
+    const workflowFiles = await globby(
+      `${repo.path}/.github/workflows/*.{yml,yaml}`,
+    );
 
     if (workflowFiles.length === 0) {
-      console.log(`No workflow files found in ${owner}/${repoName}`);
-      return [];
+      console.log(`No workflow files found in ${repoOwner}/${repoName}`);
+      return;
     }
 
-    let results: Types.ScanResponse[] = [];
     for (let workflowFile of workflowFiles) {
       const relativePath = path.relative(repo.path, workflowFile);
-      const workflowPath = `${owner}/${repoName}/${relativePath}`;
-      console.log(`Scanning workflow: ${workflowPath}`);
-      results.push(await Workflows.scan(workflowPath));
+      const workflowReference = `${repoOwner}/${repoName}/${relativePath}`;
+      const workflow = await Workflows.get(workflowReference);
+      const result = await Workflows.scan(workflow);
+      yield result;
     }
-
-    return results;
   }
 }

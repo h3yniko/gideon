@@ -1,42 +1,49 @@
 import { fs, path, YAML } from "zx";
-import { Git } from "../git";
-import { Types } from "./types";
-import { Actions } from "./actions";
-import { OpenRouter } from "../openrouter";
-import { prompt } from "./const";
+import { Git } from "../git/index.js";
+import { Types } from "./types.js";
+import { Actions } from "./actions.js";
+import { OpenRouter } from "../openrouter.js";
+import { prompt } from "./const.js";
 
 export namespace Workflows {
   export async function get(reference: string): Promise<Types.GithubWorkflow> {
+    console.log("Getting workflow", reference);
     // octo-org/example-repo/.github/workflows/reusable-workflow.yml@main
-    let match = reference.match(/^(?<repoOwner>[^/]+)\/(?<repoName>[^/@]+)(?<workflowPath>\/[^@]+)(?:@(?<gitRef>.+))?$/);
+    let match = reference.match(
+      /^(?<repoOwner>[^/]+)\/(?<repoName>[^/@]+)(?<workflowPath>\/[^@]+)(?:@(?<gitRef>.+))?$/,
+    );
     if (!match) {
-      throw new Error(`Workflow name ${reference} is invalid, please use the format "owner/repo[/workflow][@ref]"`);
+      throw new Error(
+        `Workflow name ${reference} is invalid, please use the format "owner/repo[/workflow][@ref]"`,
+      );
     }
 
     let repoOwner = match.groups?.repoOwner!;
     let repoName = match.groups?.repoName!;
-    let gitRef = match.groups?.gitRef
+    let gitRef = match.groups?.gitRef;
     let workflowPath = match.groups?.workflowPath!;
 
     let repo = await Git.clone({
       source: `https://github.com/${repoOwner}/${repoName}.git`,
-      folder: gitRef ? `${repoOwner}/${repoName}@${gitRef}` : `${repoOwner}/${repoName}`,
+      folder: gitRef
+        ? `${repoOwner}/${repoName}@${gitRef}`
+        : `${repoOwner}/${repoName}`,
       gitRef,
     });
 
-    let absoluteWorkflowPath = path.join(repo.path, workflowPath)
-    let rawContent = await fs.readFile(absoluteWorkflowPath, 'utf8');
-    let content = YAML.parse(rawContent) as Types.GithubWorkflow['content'];
-    if (!content || typeof content !== 'object') {
+    let absoluteWorkflowPath = path.join(repo.path, workflowPath);
+    let rawContent = await fs.readFile(absoluteWorkflowPath, "utf8");
+    let content = YAML.parse(rawContent) as Types.GithubWorkflow["content"];
+    if (!content || typeof content !== "object") {
       throw new Error(`Workflow file ${workflowPath} isn't valid YAML.`);
     }
 
     let actionDeps: Types.GithubAction[] = [];
     let workflowDeps: Types.GithubWorkflow[] = [];
 
-    for(let job of Object.values(content.jobs)) {
+    for (let job of Object.values(content.jobs)) {
       if (job.uses) {
-        const isLocal = job.uses.startsWith('./');
+        const isLocal = job.uses.startsWith("./");
         if (isLocal) {
           const depWorkflowName = `${repoOwner}/${repoName}/${job.uses.replace(/^\.\//, "")}`;
           const workflow = await get(depWorkflowName);
@@ -50,13 +57,13 @@ export namespace Workflows {
 
       if (job.steps) {
         for (let step of job.steps) {
-          if (!step.uses || typeof step.uses !== 'string') {
+          if (!step.uses || typeof step.uses !== "string") {
             continue;
           }
 
-          const isLocal = step.uses.startsWith('./');
+          const isLocal = step.uses.startsWith("./");
           if (isLocal) {
-            const depActionName = `${repoOwner}/${repoName}/${step.uses.replace(/^\.\//, "")}`
+            const depActionName = `${repoOwner}/${repoName}/${step.uses.replace(/^\.\//, "")}`;
             const action = await Actions.get(depActionName);
             actionDeps.push(action);
           } else {
@@ -77,11 +84,13 @@ export namespace Workflows {
       dependencies: {
         actions: actionDeps,
         workflows: workflowDeps,
-      }
-    })
+      },
+    });
   }
 
-  export async function scan(workflow: Types.GithubWorkflow): Promise<Types.ScanResponse>{
+  export async function scan(
+    workflow: Types.GithubWorkflow,
+  ): Promise<Types.ScanResponse> {
     const workflowDependenciesMap = new Map<string, string>();
     const actionDependenciesMap = new Map<string, string>();
 
@@ -119,29 +128,31 @@ export namespace Workflows {
 
     const messages: OpenRouter.Message[] = [
       {
-        role: 'system',
+        role: "system",
         content: prompt,
       },
       {
-        role: 'user',
+        role: "user",
         content: `workflow: ${JSON.stringify(workflow)}`,
       },
       {
-        role: 'user',
+        role: "user",
         content: `reusableWorkflows: ${JSON.stringify(workflowDependenciesMap.entries().toArray())}`,
       },
       {
-        role: 'user',
+        role: "user",
         content: `actionDependencies: ${JSON.stringify(actionDependenciesMap.entries().toArray())}`,
       },
     ];
-    
-    console.log(messages);
+
+    // console.log(messages);
+    console.log("Scanning workflow", workflow.reference);
     const response = await OpenRouter.complete(messages);
+    console.log("Completed scan", workflow.reference);
 
     return {
       reference: workflow.reference,
       vulnerability: response.choices[0].message.content,
-    }
+    };
   }
 }

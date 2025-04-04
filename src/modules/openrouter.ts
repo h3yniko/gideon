@@ -1,5 +1,5 @@
 import axios from "axios";
-import { Env } from './env'
+import { Env } from "./env.js";
 import { z } from "zod";
 
 let responseSchema = z.object({
@@ -10,29 +10,38 @@ let responseSchema = z.object({
     completion_tokens: z.number(),
     total_tokens: z.number(),
   }),
-  choices: z.array(z.object({
-    message: z.object({
-      role: z.string(),
-      content: z.string(),
+  choices: z.array(
+    z.object({
+      message: z.object({
+        role: z.string(),
+        content: z.string(),
+      }),
     }),
-  })),
+  ),
 });
 
 export namespace OpenRouter {
   export type Message = {
-    role: 'system' | 'user' | 'assistant';
+    role: "system" | "user" | "assistant";
     content: string;
-  }
+  };
 
-  export async function complete(messages: Message[], options?: { model?: string }) {
-    let response = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
-      model: options?.model ?? 'deepseek/deepseek-chat-v3-0324:free',
-      messages,
-    }, {
-      headers: {
-        Authorization: `Bearer ${Env.OPENROUTER_API_KEY}`,
+  export async function complete(
+    messages: Message[],
+    options?: { model?: string },
+  ) {
+    let response = await axios.post(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        model: options?.model ?? "google/gemini-2.5-pro-preview-03-25",
+        messages,
       },
-    });
+      {
+        headers: {
+          Authorization: `Bearer ${Env.OPENROUTER_API_KEY}`,
+        },
+      },
+    );
 
     return responseSchema.parse(response.data);
   }
